@@ -1,61 +1,76 @@
-import exp from 'express'
-import {authenticate,register} from '../services/authService.js'
-import {verifyToken} from '../middlewares/verifiedToken.js'
-import {ArticleModel} from '../models/ArticleModel.js'
-export const userRoute=exp.Router()
+import exp from "express";
+import { register, authenticate } from "../services/authService.js";
+import { ArticleModel } from "../models/ArticleModel.js";
+import { verifyToken } from "../middlewares/verifyToken.js";
+import { upload } from "../config/multer.js";
+import cloudinary from "../config/cloudinary.js";
+import { uploadToCloudinary } from "../config/cloudinary.js";
 
-//Register User 
-userRoute.post('/users',async(req,res)=>{
-    //get userObj from req 
-    let userObj=req.body;
-    //call register function
-    const newUserObj=await register({...userObj,role:"USER"}); //if req is reached here then its user role similarly author and admin will work
-    //send response
-    res.status(201).json({message:"user created",payload:newUserObj});
-})
-/*
-//Authenticate User (login) (role must be supplied here else server need to do extra job)
-userRoute.post('/authenticate',async(req,res)=>{
-    //get user cred object (contains whatever send by the client)
-    let userCred=req.body;
-    //call authenticate service
-    let {token,user}=await authenticate(userCred);
-    //save token as httpOnly cookie
-    res.cookie("token",token,{
-        httpOnly:true,
-        sameSite:"lax",
-        secure:false,
-    });
-    //send res
-    res.status(200).json({message:"login success",payload:user})
-})
+export const userRoute = exp.Router();
 
-*/
+//Register user
+userRoute.post("/users", upload.single("profileImageUrl"), async (req, res, next) => {
+  let cloudinaryResult;
 
-//Read all articles (protected Route)
-userRoute.get('/users',verifyToken,async(req,res)=>{
-    //fetch all published articles
-    const articles=await ArticleModel.find({status:"published"});
-    res.status(200).json({message:"article list",payload:articles});
-})
+  try {
+    //getb user obj
+    let userObj = req.body;
 
-//Add comment to an article (protected Route)
-userRoute.post('/articles/:articleId/comments',verifyToken,async(req,res)=>{
-    //get articleId from url
-    const {articleId}=req.params;
-    //create comment object
-    const comment={
-        commentedBy:req.user.username, //comes from JWT
-        comment:req.body.comment,
-        commentedAt:new Date()
+    //  Step 1: upload image to cloudinary from memoryStorage (if exists)
+    if (req.file) {
+      cloudinaryResult = await uploadToCloudinary(req.file.buffer);
     }
-    //push comment to article
-    const updatedArticle=await ArticleModel.findByIdAndUpdate(articleId,{$push:{comments:comment}},{new:true})
-    res.status(200).json({message:"comment added",payload:updatedArticle})
+
+    // Step 2: call existing register()
+    const newUserObj = await register({
+      ...userObj,
+      role: "USER",
+      profileImageUrl: cloudinaryResult?.secure_url,
+    });
+
+    res.status(201).json({
+      message: "user created",
+      payload: newUserObj,
+    });
+  } catch (err) {
+    // Step 3: rollback
+    if (cloudinaryResult?.public_id) {
+      await cloudinary.uploader.destroy(cloudinaryResult.public_id);
+    }
+
+    next(err); // send to your error middleware
+  }
 });
 
-// Logout
-userRoute.post("/logout",(req,res)=>{
-  res.clearCookie("token");
-  res.status(200).json({message:"Logged out"});
+//Read all articles(protected route)
+userRoute.get("/articles", verifyToken("USER"), async (req, res) => {
+  //read articles of all authors which are active
+  const articles = await ArticleModel.find({ isArticleActive: true }).populate("comments.user","email firstName");
+  //send res
+  res.status(200).json({ message: "all articles", payload: articles });
 });
+
+//Add comment to an article(protected route)
+userRoute.put("/articles", verifyToken("USER"), async (req, res) => {
+  try {
+    const { articleId, comment } = req.body;
+    const user = req.user.userId; // ✅ take from token
+    let articleWithComment = await ArticleModel.findOneAndUpdate(
+      { _id: articleId, isArticleActive: true },
+      { $push: { comments: { user, comment } } },
+      { new: true, runValidators: true }
+    ).populate("comments.user", "email firstName");
+    if (!articleWithComment) {
+      return res.status(404).json({ message: "Article not found" });
+    }
+    res.status(200).json({
+      message: "comment added successfully",
+      payload: articleWithComment
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+//next() ---> next middleware
+//next(err) ---> error handling middleware

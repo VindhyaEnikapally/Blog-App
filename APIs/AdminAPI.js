@@ -1,6 +1,6 @@
 import exp from 'express'
 import { UserTypeModel } from '../models/UserModel.js'
-import { verifyToken } from '../middlewares/verifiedToken.js'
+import { verifyToken } from '../middlewares/verifyToken.js'
 import { register } from '../services/authService.js'
 
 export const adminRoute = exp.Router()
@@ -28,7 +28,7 @@ const checkAdmin=(req,res,next) => {
 }
 
 // block user
-adminRoute.put('/block-user/:userId',verifyToken,checkAdmin,
+adminRoute.put('/block-user/:userId',verifyToken("ADMIN"),checkAdmin,
   async (req,res,next)=>{
     try {
       const {userId}=req.params
@@ -46,7 +46,7 @@ adminRoute.put('/block-user/:userId',verifyToken,checkAdmin,
 )
 
 // unblock user
-adminRoute.put('/unblock-user/:userId',verifyToken,checkAdmin,
+adminRoute.put('/unblock-user/:userId',verifyToken("ADMIN"),checkAdmin,
   async (req,res,next)=>{
     try {
       const {userId}=req.params
